@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EducateNepal</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header><main><h1><a href="#/" style="text-decoration:none">EducateNepal</a></h1><a href="admin.html">Teacher login</a></main></header>
+<main>
+  <form class="bar" id="sf"><input type="search" id="q" placeholder="Search folders and files"><button>Search</button></form>
+  <div class="crumbs" id="crumbs"></div>
+  <div id="list"></div>
+</main>
+<div id="viewer"><div class="top"><span id="vname"></span><span><a id="vdl" href="#">Download</a> <button onclick="closeV()">Close</button></span></div><div class="stage" id="stage"></div></div>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const size = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+async function get(u){ const r = await fetch(u); return r.json(); }
+
+function fileCard(f){
+  const thumb = f.type === 'application/pdf'
+    ? `<div class="pdf" onclick="openV('${f.id}')">PDF</div>`
+    : `<img class="thumb" loading="lazy" src="/api/file/${f.id}" alt="${esc(f.name)}" onclick="openV('${f.id}')">`;
+  return `<div class="item">${thumb}<p>${esc(f.name)}<br><span class="meta">${size(f.size)}</span></p></div>`;
+}
+let current = [];
+async function show(){
+  const hash = location.hash;
+  if (hash.startsWith('#/search/')) {
+    const q = decodeURIComponent(hash.slice(9));
+    const d = await get('/api/search?q=' + encodeURIComponent(q));
+    $('crumbs').innerHTML = `<a href="#/">Home</a> / Search: ${esc(q)}`;
+    current = d.files;
+    $('list').innerHTML = (d.folders.length ? '<h2>Folders</h2>' + d.folders.map(f => `<div class="row"><a class="name" href="#/${f.id}">${esc(f.name)}</a></div>`).join('') : '')
+      + (d.files.length ? '<h2>Files</h2><div class="grid">' + d.files.map(fileCard).join('') + '</div>' : '')
+      + (!d.folders.length && !d.files.length ? '<p class="empty">Nothing found.</p>' : '');
+    return;
+  }
+  const id = hash.startsWith('#/') ? hash.slice(2) : '';
+  const d = await get('/api/browse' + (id ? '?folder=' + id : ''));
+  if (d.error) { $('list').innerHTML = '<p class="empty">This folder does not exist.</p>'; return; }
+  $('crumbs').innerHTML = ['<a href="#/">Home</a>', ...d.crumbs.map((c, i) => i === d.crumbs.length - 1 ? esc(c.name) : `<a href="#/${c.id}">${esc(c.name)}</a>`)].join(' / ');
+  current = d.files;
+  $('list').innerHTML = d.folders.map(f => `<div class="row"><a class="name" href="#/${f.id}">${esc(f.name)}</a><span class="meta">${f.subfolders ? f.subfolders + ' folders, ' : ''}${f.files} files</span></div>`).join('')
+    + (d.files.length ? '<h2>Files</h2><div class="grid">' + d.files.map(fileCard).join('') + '</div>' : '')
+    + (!d.folders.length && !d.files.length ? '<p class="empty">This folder is empty.</p>' : '');
+}
+function openV(id){
+  const f = current.find(x => x.id === id); if (!f) return;
+  $('vname').textContent = f.name;
+  $('vdl').href = `/api/file/${id}?download=1`;
+  $('stage').innerHTML = f.type === 'application/pdf' ? `<iframe src="/api/file/${id}"></iframe>` : `<img src="/api/file/${id}" alt="${esc(f.name)}">`;
+  $('viewer').classList.add('on');
+}
+function closeV(){ $('viewer').classList.remove('on'); $('stage').innerHTML = ''; }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeV(); });
+$('sf').onsubmit = e => { e.preventDefault(); const q = $('q').value.trim(); location.hash = q ? '#/search/' + encodeURIComponent(q) : '#/'; };
+addEventListener('hashchange', show); show();
+</script>
+</body></html>

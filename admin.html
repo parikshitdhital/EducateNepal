@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Teacher panel - EducateNepal</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header><main><h1>EducateNepal: teacher panel</h1><span><a href="index.html">View public site</a> <span id="out"></span></span></main></header>
+<main id="app"></main>
+<dialog id="mv"><p>Move to:</p><select id="mvsel"></select><p><button id="mvok">Move</button> <button onclick="mv.close()">Cancel</button></p></dialog>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const size = n => n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+async function api(url, method = 'GET', data) {
+  const r = await fetch('/api/' + url, { method, headers: data ? {'content-type':'application/json'} : {}, body: data ? JSON.stringify(data) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'Something went wrong');
+  return j;
+}
+const run = async fn => { try { await fn(); } catch (e) { alert(e.message); } };
+
+let folder = '';   // current folder id ('' = top)
+async function start() {
+  const s = await api('status');
+  $('out').innerHTML = s.email ? ` | ${esc(s.email)} <button onclick="logout()">Log out</button>` : '';
+  if (s.email) return browse();
+  $('app').innerHTML = `<form class="box" id="f">
+    <b>${s.needsSetup ? 'Create the teacher account' : 'Log in'}</b>
+    <input name="email" type="email" placeholder="Email" required>
+    <input name="password" type="password" placeholder="Password" required>
+    ${s.needsSetup ? '<input name="key" type="password" placeholder="Setup key" required>' : ''}
+    <button>${s.needsSetup ? 'Create account' : 'Log in'}</button><span class="err" id="e"></span></form>`;
+  $('f').onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target));
+    try { if (s.needsSetup) await api('setup', 'POST', d); await api('login', 'POST', d); start(); }
+    catch (x) { $('e').textContent = x.message; }
+  };
+}
+async function logout() { await api('logout', 'POST'); start(); }
+
+async function browse(id = folder) {
+  folder = id;
+  const d = await api('browse' + (id ? '?folder=' + id : ''));
+  const crumbs = ['<a href="#" onclick="browse(\'\');return false">Home</a>', ...d.crumbs.map((c, i) => i === d.crumbs.length - 1 ? esc(c.name) : `<a href="#" onclick="browse('${c.id}');return false">${esc(c.name)}</a>`)].join(' / ');
+  $('app').innerHTML = `
+    <div class="crumbs">${crumbs}</div>
+    <div class="bar"><button onclick="newFolder()">New folder</button>
+      <button onclick="$('pick').click()">Upload files</button>
+      <input type="file" id="pick" multiple accept="image/jpeg,image/png,image/webp,application/pdf" hidden></div>
+    <div class="drop" id="drop">Drop photos or PDFs here to upload to this folder</div>
+    <div id="msg" class="meta"></div>
+    ${d.folders.map(f => `<div class="row"><a class="name" href="#" onclick="browse('${f.id}');return false">${esc(f.name)}</a>
+      <span class="meta">${f.files} files</span>
+      <span class="tools"><button onclick="rename('folders','${f.id}','${esc(f.name).replace(/'/g,"\\'")}')">Rename</button><button onclick="move('folders','${f.id}')">Move</button><button class="danger" onclick="del('folders','${f.id}','${esc(f.name).replace(/'/g,"\\'")}')">Delete</button></span></div>`).join('')}
+    ${d.files.map(f => `<div class="row"><a class="name" href="/api/file/${f.id}" target="_blank">${esc(f.name)}</a>
+      <span class="meta">${size(f.size)}</span>
+      <span class="tools"><button onclick="rename('files','${f.id}','${esc(f.name).replace(/'/g,"\\'")}')">Rename</button><button onclick="move('files','${f.id}')">Move</button><button class="danger" onclick="del('files','${f.id}','${esc(f.name).replace(/'/g,"\\'")}')">Delete</button></span></div>`).join('')}
+    ${!d.folders.length && !d.files.length ? '<p class="empty">This folder is empty. Create a folder or upload files.</p>' : ''}`;
+  $('pick').onchange = e => upload([...e.target.files]);
+  const dz = $('drop');
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add('over'); };
+  dz.ondragleave = () => dz.classList.remove('over');
+  dz.ondrop = e => { e.preventDefault(); dz.classList.remove('over'); upload([...e.dataTransfer.files]); };
+}
+const newFolder = () => run(async () => { const n = prompt('Folder name'); if (n) { await api('folders', 'POST', { name: n, parent_id: folder || null }); browse(); } });
+const rename = (kind, id, old) => run(async () => { const n = prompt('New name', old); if (n && n !== old) { await api(kind + '/' + id, 'PATCH', { name: n }); browse(); } });
+const del = (kind, id, name) => run(async () => {
+  const warn = kind === 'folders' ? `Delete the folder "${name}" and everything inside it? This cannot be undone.` : `Delete "${name}"?`;
+  if (confirm(warn)) { await api(kind + '/' + id, 'DELETE'); browse(); }
+});
+async function upload(list) {
+  for (let i = 0; i < list.length; i++) {
+    $('msg').textContent = `Uploading ${i + 1} of ${list.length}: ${list[i].name}`;
+    const fd = new FormData(); fd.append('file', list[i]);
+    const r = await fetch('/api/upload' + (folder ? '?folder=' + folder : ''), { method: 'POST', body: fd });
+    if (!r.ok) { const j = await r.json().catch(() => ({})); alert(list[i].name + ': ' + (j.error || 'upload failed')); }
+  }
+  browse();
+}
+async function move(kind, id) {
+  const tree = await api('tree');
+  const path = f => (f.parent_id ? path(tree.find(x => x.id === f.parent_id) || {name:'?'}) + ' / ' : '') + f.name;
+  const opts = tree.map(f => ({ id: f.id, label: path(f) })).sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  $('mvsel').innerHTML = '<option value="">Home (top level)</option>' + opts.map(o => `<option value="${o.id}">${esc(o.label)}</option>`).join('');
+  $('mvok').onclick = () => run(async () => {
+    const t = $('mvsel').value || null;
+    await api(kind + '/' + id, 'PATCH', kind === 'folders' ? { parent_id: t } : { folder_id: t });
+    $('mv').close(); browse();
+  });
+  $('mv').showModal();
+}
+start();
+</script>
+</body></html>
